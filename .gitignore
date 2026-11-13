@@ -1,0 +1,9 @@
+bin/
+obj/
+publish/
+.vs/
+*.user
+Tools/ffmpeg/
+
+Assets/Oasis_English.inf
+Assets/Oasis.key
