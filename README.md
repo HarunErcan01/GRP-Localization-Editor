@@ -7,8 +7,9 @@ desteklenen BAO seslerini çıkarıp yeniden paketler. Projeyi Harun Ercan geli�
 ## Kaynaktan çalıştırma
 
 Windows ve .NET 10 SDK ile proje klasöründe `dotnet build -c Release` ve
-`dotnet run` çalıştır. Kaynak kod kendi başına derlenir. Oyun referansı ve
-dönüştürme özellikleri için yerel dosyalarını derlemeden önce ekle.
+`dotnet run` çalıştır. İngilizce oyun referansı ve Oasis anahtarı depodaki `Assets`
+klasöründen uygulamaya gömülür. WAV ve Bink işlemleri için FFmpeg'i aşağıdaki
+konuma ekle.
 
 - `Assets/Oasis_English.inf` gömülü İngilizce referans için okunabilir UTF-8 Oasis dosyasıdır.
 - `Assets/Oasis.key` Oasis anahtarının 32 ASCII baytını içerir. Dosyaya BOM veya satır sonu ekleme.
