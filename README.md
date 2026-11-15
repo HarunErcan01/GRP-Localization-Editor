@@ -2,7 +2,7 @@
 
 Ghost Recon Online ve Ghost Recon Phantoms için Windows yerelleştirme editörü.
 Oasis metinlerini yan yana düzenler, INF ve INF.ENC arasında dönüşüm yapar ve
-desteklenen BAO seslerini çıkarıp yeniden paketler. Projeyi Harun Ercan geliştiriyor.
+desteklenen BAO seslerini çıkarıp yeniden paketler.
 
 ## Kaynaktan çalıştırma
 
