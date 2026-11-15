@@ -61,7 +61,6 @@ karşılığı olmayan kodun düzenleme alanı kapalıdır. Oyun içi satır son
 Şifreleme çıktısı `.inf.enc`, şifre çözme çıktısı `.inf` ile biter.
 Program, dosya adına yanlışlıkla eklenen yinelenmiş uzantıları kaldırır.
 Girdi ve çıktı için ayrı yollar seç. Dönüştürme Twofish CFB1 ve gömülü Oasis anahtarını kullanır.
-Harici `KEY.txt` gerekmez.
 
 ## Ses paketleri
 
