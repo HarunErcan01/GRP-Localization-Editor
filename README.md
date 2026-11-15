@@ -55,6 +55,8 @@ karşılığı olmayan kodun düzenleme alanı kapalıdır. Oyun içi satır son
 | Şifreyi çöz | `.inf.enc` girdisinden okunabilir UTF-8 `.inf` dosyası üretir. |
 | Şifrele | Düzenlenen `.inf` dosyasından Oasis `.inf.enc` çıktısı üretir. |
 
+Şifreleme çıktısı `.inf.enc`, şifre çözme çıktısı `.inf` ile biter.
+Program, dosya adına yanlışlıkla eklenen yinelenmiş uzantıları kaldırır.
 Girdi ve çıktı için ayrı yollar seç. Dönüştürme Twofish CFB1 ve gömülü Oasis anahtarını kullanır.
 Harici `KEY.txt` gerekmez.
 
@@ -68,10 +70,15 @@ Harici `KEY.txt` gerekmez.
    **Ogg çıkar** ile orijinal Vorbis akışını kaydet. **Tümünü WAV Olarak
    Çıkar** ve **Tümünü OGG Olarak Çıkar**, seçili bankanın desteklenen
    kayıtlarını ayrı dosyalara yazar. Atlanan ve hatalı kayıtlar raporlanır.
-4. **Sesi değiştir ve paketle** ile bir WAV veya Ogg Vorbis dosyası seç.
-   WAV, orijinal kanal sayısı ve örnekleme hızına dönüştürülür. Ogg girdisi
-   bu değerlere zaten uymalıdır. Çıktı, değişen banka ve ses paketi
-   kopyalarını özgün adlarıyla yeni bir klasöre yazar.
+4. **Sesi değiştir** ile bir WAV veya Ogg Vorbis dosyası seç. **Ses klasörünü
+   içe aktar** ile birden fazla kaydı birlikte hazırla. Değişiklikleri
+   paketlemeden önce dinleyebilirsin. WAV, orijinal kanal sayısına ve
+   örnekleme hızına dönüştürülür. Ogg girdisi bu değerlere uymalıdır.
+5. **Mevcut ses bankasının üzerine yaz**, her özgün dosyayı bulunduğu klasöre
+   `.bak1`, `.bak2` gibi numaralı uzantılarla yedekler ve bekleyen değişiklikleri
+   ilgili paketlere yazar. Bir kayıt işlemindeki tüm yedekler aynı numarayı alır.
+   **Ses bankasını farklı kaydet**, banka ve SPK adlarını seçmene izin verir.
+   Paket kopyalarını seçtiğin klasör içinde yeni bir alt klasöre kaydeder.
 
 | Dosya türü | İçerik |
 | --- | --- |
@@ -85,11 +92,11 @@ Harici `KEY.txt` gerekmez.
 `UI_InGame_PC.pk` oyun içi arayüz sesleri için bir başlangıç noktasıdır.
 `Tutorial.bik` dosyasının ikinci ses kanalında İngilizce eğitim anlatımı bulunur.
 
-Yeniden paketleme BAO 28.1.2 biçimindeki tek parçalı, döngüsüz Vorbis
-kayıtlarını destekler. Oyun içindeki ses kimliği korunur. Her işlem tek kaydı
-değiştirir ve ayrı bir çıktı üretir. Bir sonraki değişikliği öncekinin üstüne
-eklemek için, çıktı dosyalarını ayrı bir tam kaynak kopyasına aktar ve bu
-kopyayı araçta aç. Yeni paketler oyun içinde ayrıca denenmelidir.
+Yeniden paketleme BAO 28.1.2 biçimindeki tek parçalı, döngüsüz Vorbis kayıtlarını destekler.
+**Ses klasörünü içe aktar**, seçili bankadaki kayıtları dosya adının sonundaki sekiz haneli
+onaltılık kimliğe göre eşler. Dışa aktarılan adları koru ve her kimlik için bir WAV veya Ogg kullan.
+Kaynak paketleri güncellemeden önce oyunu kapat. Ses çıktılarını oyun klasörü içindeki bir alt klasöre de kaydedebilirsin.
+Yeni paketleri oyun içinde ayrıca dene.
 
 WAV, dinleme ve Bink çıkarma için kullanılan FFmpeg, hazır paketin
 `Tools/ffmpeg` klasöründedir ve otomatik kullanılır. Kaynak koddan ses

@@ -126,7 +126,7 @@ internal sealed class MainForm : Form
         BuildConverter();
         audio = new AudioPanel { Dock = DockStyle.Fill };
         audioTab.Controls.Add(audio);
-        FormClosing += (_, e) => e.Cancel = !restarting && (converting || audio.Busy || !ConfirmDiscard());
+        FormClosing += (_, e) => e.Cancel = !restarting && (converting || audio.Busy || !ConfirmDiscard() || !audio.ConfirmDiscard());
         PopulateRows();
         Shown += (_, _) => BeginInvoke(() =>
         {
@@ -150,7 +150,7 @@ internal sealed class MainForm : Form
 
         bool restart = Ui.Resolve(System.Globalization.CultureInfo.CurrentUICulture.Name, choice.Code).Code != Ui.ActiveCode;
         if (restart && (MessageBox.Show(this, T("TheAppWillRestartToChange"),
-            AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes || !ConfirmDiscard()))
+            AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes || !ConfirmDiscard() || !audio.ConfirmDiscard()))
         {
             picker.SelectedIndex = previous;
             return;
@@ -348,18 +348,9 @@ internal sealed class MainForm : Form
         var input = ChooseInput(decrypt ? EncFilter : InfFilter);
         if (input is null)
             return;
-        var name = Path.GetFileName(input);
-        string suggested = decrypt
-            ? (name.EndsWith(".enc", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name + ".inf")
-            : (name.EndsWith(".inf", StringComparison.OrdinalIgnoreCase) ? name + ".enc" : name + ".inf.enc");
-        var output = ChooseOutput(decrypt ? InfFilter : EncFilter, decrypt ? "inf" : "inf.enc", suggested, input);
+        var output = ChooseConversionOutput(input, decrypt);
         if (output is null)
             return;
-        if (targetPath is not null && SafeFile.SamePath(output, targetPath))
-        {
-            ShowError(new IOException(T("SaveTheOutputInADifferent")));
-            return;
-        }
 
         converting = true;
         foreach (var button in buttons)
@@ -370,12 +361,10 @@ internal sealed class MainForm : Form
         {
             await Task.Run(() =>
             {
-                if (SafeFile.SamePath(input, output))
-                    throw new IOException(T("SelectDifferentFilesForInputAnd"));
                 var data = OasisCipher.Convert(File.ReadAllBytes(input), decrypt);
-                SafeFile.Write(output, data, overwrite: true);
+                SafeFile.Write(output.Value.Path, data, overwrite: output.Value.Overwrite);
             });
-            Say(T("ConversionCompleted0", output));
+            Say(T("ConversionCompleted0", output.Value.Path));
         }
         catch (Exception ex) when (IsFileError(ex))
         {
@@ -792,6 +781,48 @@ internal sealed class MainForm : Form
     {
         using var dialog = new OpenFileDialog { Filter = filter, CheckFileExists = true };
         return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
+    }
+
+    internal static string ConversionFileName(string name, bool decrypt)
+    {
+        const StringComparison comparison = StringComparison.OrdinalIgnoreCase;
+        while (name.EndsWith(".enc", comparison) || name.EndsWith(".inf", comparison))
+            name = name[..^4];
+        return name + (decrypt ? ".inf" : ".inf.enc");
+    }
+
+    private (string Path, bool Overwrite)? ChooseConversionOutput(string input, bool decrypt)
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Filter = decrypt ? InfFilter : EncFilter,
+            AddExtension = false,
+            OverwritePrompt = false,
+            FileName = ConversionFileName(Path.GetFileName(input), decrypt),
+            InitialDirectory = Path.GetDirectoryName(input)
+        };
+        while (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            var output = Path.Combine(Path.GetDirectoryName(dialog.FileName)!,
+                ConversionFileName(Path.GetFileName(dialog.FileName), decrypt));
+            dialog.FileName = Path.GetFileName(output);
+            if (SafeFile.SamePath(input, output))
+            {
+                ShowError(new IOException(T("SelectDifferentFilesForInputAnd")));
+                continue;
+            }
+            if ((targetPath is not null && SafeFile.SamePath(output, targetPath)) ||
+                (referencePath is not null && SafeFile.SamePath(output, referencePath)))
+            {
+                ShowError(new IOException(T("SaveTheOutputInADifferent")));
+                continue;
+            }
+            bool exists = File.Exists(output);
+            if (!exists || MessageBox.Show(this, T("ConfirmConversionOverwrite", output),
+                AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                return (output, exists);
+        }
+        return null;
     }
 
     private string? ChooseOutput(string filter, string extension, string suggested, string? beside)

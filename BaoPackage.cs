@@ -119,6 +119,42 @@ internal sealed class BaoPackage
         return result;
     }
 
+    public void WriteWithExternalNames(string destination, Func<External, string> getName)
+    {
+        var bytes = File.ReadAllBytes(Path);
+        if (Externals.Count == 0)
+        {
+            SafeFile.Write(destination, bytes, overwrite: false);
+            return;
+        }
+
+        using var names = new MemoryStream();
+        var offsets = new Dictionary<string, int>(StringComparer.Ordinal);
+        var rows = new byte[Externals.Count * 16];
+        for (int i = 0; i < Externals.Count; i++)
+        {
+            var external = Externals[i];
+            var name = getName(external);
+            if (!offsets.TryGetValue(name, out int offset))
+            {
+                offset = checked((int)names.Length);
+                offsets.Add(name, offset);
+                names.Write(Encoding.ASCII.GetBytes(name));
+                names.WriteByte(0);
+            }
+            bytes.AsSpan(external.Row, 16).CopyTo(rows.AsSpan(i * 16));
+            WriteNumber(rows, i * 16 + 4, offset);
+        }
+
+        using var output = new MemoryStream();
+        WriteNumber(bytes, TableOffset + 4, checked((int)names.Length));
+        output.Write(bytes.AsSpan(0, TableOffset + 8));
+        names.WriteTo(output);
+        output.Write(rows);
+        output.Write(bytes.AsSpan(Externals[^1].Row + 16));
+        SafeFile.Write(destination, output.ToArray(), overwrite: false);
+    }
+
     public byte[] ReadAudio(Entry entry)
     {
         using var file = File.OpenRead(Path);

@@ -18,7 +18,12 @@ internal sealed class AudioPanel : UserControl
     private readonly Button ogg;
     private readonly Button allWav;
     private readonly Button allOgg;
-    private readonly Button repack;
+    private readonly Button replaceAudio;
+    private readonly Button overwriteBank;
+    private readonly Button saveBankAs;
+    private readonly Dictionary<string, Dictionary<(bool Streamed, uint Id), AudioLibrary.Replacement>> pending =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Button importFolder;
     private AudioLibrary? library;
     private BaoPackage? bank;
     private string? video;
@@ -26,6 +31,13 @@ internal sealed class AudioPanel : UserControl
     private SoundPlayer? player;
     private MemoryStream? playback;
     private readonly string? ffmpeg = AudioTools.FindFfmpeg();
+    private Dictionary<(bool Streamed, uint Id), AudioLibrary.Replacement>? Pending =>
+        bank is null ? null : pending.GetValueOrDefault(bank.Path);
+
+    public bool ConfirmDiscard() => pending.Count == 0 || MessageBox.Show(this, T("AudioDiscardPending"),
+        T("AudioPackages"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+        MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+
     public bool Busy { get; private set; }
 
     private sealed record FileItem(string Path, string Name)
@@ -42,17 +54,32 @@ internal sealed class AudioPanel : UserControl
         ogg = Button(T("ExtractOgg"), T("SavesTheOriginalVorbisStreamWithout"), async () => await Export(false));
         allWav = Button(T("ExtractAllAsWav"), T("ExtractsSupportedRecordingsFromTheOpen"), async () => await ExportAll(true));
         allOgg = Button(T("ExtractAllAsOgg"), T("ExtractsVorbisRecordsFromTheOpen"), async () => await ExportAll(false));
-        repack = Button(T("ReplaceAudioAndRepack"), T("SelectsAWavOrOggAnd"), async () => await Repack());
+        replaceAudio = Button(T("ReplaceAudio"), T("ReplaceAudioTip"), async () => await ReplaceAudio());
+        overwriteBank = Button(T("OverwriteAudioBank"), T("OverwriteAudioBankTip"), async () => await SaveBank(overwrite: true));
+        saveBankAs = Button(T("SaveAudioBankAs"), T("SaveAudioBankAsTip"), async () => await SaveBank(overwrite: false));
+        importFolder = Button(T("ImportAudioFolder"), T("ImportAudioFolderTip"), async () => await ImportFolder());
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(12) };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(12) };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 113));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         var toolbar = Flow();
-        toolbar.Controls.AddRange([choose, filter, guide]);
-        layout.Controls.Add(toolbar, 0, 0);
+        toolbar.Controls.AddRange([guide, choose]);
+        var saveCommands = Flow();
+        saveCommands.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        saveCommands.Anchor = AnchorStyles.Right | AnchorStyles.Top;
+        saveCommands.WrapContents = false;
+        saveCommands.Controls.AddRange([overwriteBank, saveBankAs]);
+        var header = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2 };
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        header.Controls.Add(toolbar, 0, 0);
+        header.Controls.Add(saveCommands, 1, 0);
+        layout.Controls.Add(header, 0, 0);
+        layout.Controls.Add(filter, 0, 1);
 
         var browser = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
         browser.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
@@ -65,18 +92,18 @@ internal sealed class AudioPanel : UserControl
         tracks.Columns.Add(T("ChannelsHz"), 110);
         tracks.Columns.Add(T("Duration"), 83);
         tracks.Columns.Add(T("Location"), 105);
-        layout.Controls.Add(browser, 0, 1);
-        layout.Controls.Add(details, 0, 2);
+        layout.Controls.Add(browser, 0, 2);
+        layout.Controls.Add(details, 0, 3);
 
         var commands = Flow();
         var stop = Button(T("Stop"), T("StopsTheAudioPreview"), StopPlayback);
-        commands.Controls.AddRange([play, stop, wav, ogg, allWav, allOgg, repack]);
-        layout.Controls.Add(commands, 0, 3);
-        layout.Controls.Add(status, 0, 4);
+        commands.Controls.AddRange([play, stop, wav, ogg, allWav, allOgg, replaceAudio, importFolder]);
+        layout.Controls.Add(commands, 0, 4);
+        layout.Controls.Add(status, 0, 5);
         Controls.Add(layout);
 
         filter.TextChanged += (_, _) => FilterFiles();
-        packages.SelectedIndexChanged += async (_, _) => await LoadSelection();
+        packages.SelectedIndexChanged += PackageSelectionChanged;
         tracks.SelectedIndexChanged += (_, _) => Describe();
         tracks.MouseDoubleClick += async (_, e) =>
         {
@@ -112,8 +139,11 @@ internal sealed class AudioPanel : UserControl
         await Work(T("SearchingForVoicePacks"), async () =>
         {
             library = await Task.Run(() => new AudioLibrary(dialog.SelectedPath));
+            StopPlayback();
+            packages.SelectedIndex = -1;
             bank = null;
             video = null;
+            linkedBanks = [];
             tracks.Items.Clear();
             FilterFiles();
             Describe();
@@ -124,6 +154,7 @@ internal sealed class AudioPanel : UserControl
     private void FilterFiles()
     {
         var selected = (packages.SelectedItem as FileItem)?.Path;
+        packages.SelectedIndexChanged -= PackageSelectionChanged;
         packages.BeginUpdate();
         try
         {
@@ -143,8 +174,16 @@ internal sealed class AudioPanel : UserControl
                     }
             }
         }
-        finally { packages.EndUpdate(); }
+        finally
+        {
+            packages.EndUpdate();
+            packages.SelectedIndexChanged += PackageSelectionChanged;
+        }
+        if (selected is not null && packages.SelectedIndex < 0)
+            _ = LoadSelection();
     }
+
+    private async void PackageSelectionChanged(object? sender, EventArgs e) => await LoadSelection();
 
     private async Task LoadSelection()
     {
@@ -180,7 +219,7 @@ internal sealed class AudioPanel : UserControl
             if (tracks.Items.Count > 0)
                 tracks.Items[0].Selected = true;
             Describe();
-            Say(T("01N0AudioTracks", file.Name, tracks.Items.Count));
+            Say(Pending is { } edits ? T("AudioPendingCount", edits.Count) : T("01N0AudioTracks", file.Name, tracks.Items.Count));
         });
     }
 
@@ -197,7 +236,11 @@ internal sealed class AudioPanel : UserControl
         bool hasVorbis = bank?.Clips.Any(clip => CanExport(clip, asWav: false)) == true;
         allOgg.Enabled = !Busy && hasVorbis;
         allWav.Enabled = !Busy && ffmpeg is not null && (hasVorbis || (video is not null && tracks.Items.Count > 0));
-        repack.Enabled = !Busy && supported && clip is { Looped: false };
+        importFolder.Enabled = !Busy && bank?.Clips.Any(c => c is { Codec: 4, Looped: false, Prefetched: false }) == true;
+        replaceAudio.Enabled = !Busy && supported && clip is { Looped: false };
+
+        overwriteBank.Enabled = !Busy && Pending is { Count: > 0 };
+        saveBankAs.Enabled = !Busy && bank is not null && (bank.Clips.Count > 0 || bank.Externals.Count > 0);
 
         if (clip is not null && bank is not null)
         {
@@ -209,6 +252,8 @@ internal sealed class AudioPanel : UserControl
                 (clip.Looped ? T("LoopedAudio") : "") +
                 (supported ? (clip.Looped ? T("Exportable") : T("CanBeExportedAndRepackaged"))
                            : T("ThereIsNoExtractionSupportFor"));
+            if (Pending?.ContainsKey((clip.Streamed, clip.AudioId)) == true)
+                details.AppendText("\r\n" + T("AudioPendingTrack"));
         }
         else if (video is not null)
         {
@@ -257,12 +302,12 @@ internal sealed class AudioPanel : UserControl
         string id = selection is BaoPackage.Clip clip ? $"{clip.Header.Id:X8}" : $"track{(int)selection + 1}";
         string ext = asWav ? "wav" : "ogg";
         using var dialog = new SaveFileDialog { Filter = T("AudioFile01", ext, ext), DefaultExt = ext,
-            FileName = $"{stem}_{id}.{ext}", OverwritePrompt = true };
+            FileName = $"{stem}_{id}.{ext}", OverwritePrompt = true, AddExtension = true };
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
-        if (library is not null && IsInside(dialog.FileName, library.Root))
+        if (!Path.GetExtension(dialog.FileName).Equals("." + ext, StringComparison.OrdinalIgnoreCase))
         {
-            Say(T("SaveOutputToALocationOutside"));
+            MessageBox.Show(this, T("AudioExportExtension", ext), T("AudioPackages"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
         await Work(T("ExtractingAudio"), async () =>
@@ -286,11 +331,6 @@ internal sealed class AudioPanel : UserControl
         using var dialog = new FolderBrowserDialog { Description = T("SelectParentFolderForBatchAudio") };
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
-        if (IsInside(dialog.SelectedPath, library.Root))
-        {
-            Say(T("ChooseALocationOutsideTheSource"));
-            return;
-        }
 
         string stem = Path.GetFileNameWithoutExtension(bank?.Path ?? video)!;
         string format = asWav ? "wav" : "ogg";
@@ -349,7 +389,8 @@ internal sealed class AudioPanel : UserControl
     {
         if (selection is int index && video is not null)
             return AudioTools.ExtractVideoTrack(RequireFfmpeg(), video, index);
-        var bytes = library!.Extract(bank!, (BaoPackage.Clip)selection);
+        var clip = (BaoPackage.Clip)selection;
+        var bytes = Pending?.GetValueOrDefault((clip.Streamed, clip.AudioId))?.Audio ?? library!.Extract(bank!, clip);
         return asWav ? AudioTools.DecodeWav(RequireFfmpeg(), bytes) : bytes;
     }
 
@@ -368,40 +409,194 @@ internal sealed class AudioPanel : UserControl
         });
     }
 
-    private async Task Repack()
+    private async Task ReplaceAudio()
     {
         if (Busy || Selection is not BaoPackage.Clip clip || library is null || bank is null)
             return;
         using var input = new OpenFileDialog { Filter = T("NewRecordWavOggWavOgg"), CheckFileExists = true };
         if (input.ShowDialog(this) != DialogResult.OK)
             return;
-        using var folder = new FolderBrowserDialog { Description = T("SelectTheParentFolderWherePackage") };
-        if (folder.ShowDialog(this) != DialogResult.OK)
+        await ApplyImports([new AudioLibrary.Import(clip.Header.Id, input.FileName)]);
+    }
+
+    private async Task ImportFolder()
+    {
+        if (Busy || bank is null)
             return;
-        if (IsInside(folder.SelectedPath, library.Root))
+        using var dialog = new FolderBrowserDialog { Description = T("ImportAudioFolderTip") };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+        AudioLibrary.Import[] imports;
+        try
         {
-            Say(T("ChooseALocationOutsideTheSource2"));
+            imports = AudioLibrary.MatchFolder(bank, dialog.SelectedPath);
+            if (imports.Length == 0)
+                throw new InvalidDataException(T("NoMatchingAudioImports"));
+        }
+        catch (Exception ex) when (IsAudioError(ex))
+        {
+            MessageBox.Show(this, ex.Message, T("AudioPackages"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        await Work(T("CreatingPackageCopies"), async () =>
+        await ApplyImports(imports);
+    }
+
+    private async Task ApplyImports(AudioLibrary.Import[] imports)
+    {
+        if (library is null || bank is not { } selectedBank)
+            return;
+
+        StopPlayback();
+        await Work(T("AudioPreparingChanges"), async () =>
         {
-            string directory = await Task.Run(() =>
+            var edits = await Task.Run(() => imports.Select(import =>
             {
-                var bytes = Path.GetExtension(input.FileName).Equals(".ogg", StringComparison.OrdinalIgnoreCase)
-                    ? File.ReadAllBytes(input.FileName)
-                    : AudioTools.EncodeVorbis(RequireFfmpeg(), input.FileName, clip.Channels, clip.Rate);
-                return library.Repack(bank, clip, bytes, folder.SelectedPath);
-            });
-            Say(T("PackagesSaved0", directory));
-            MessageBox.Show(this, directory, T("PackageCopiesCreated"));
+                var clip = selectedBank.Clips.Single(item => item.Header.Id == import.HeaderId);
+                if (clip is not { Codec: 4, Looped: false, Prefetched: false })
+                    throw new InvalidDataException(T("ThisProcessSupportsSeamlessOggVorbis"));
+                var audio = Path.GetExtension(import.Path).Equals(".ogg", StringComparison.OrdinalIgnoreCase)
+                    ? File.ReadAllBytes(import.Path)
+                    : AudioTools.EncodeVorbis(RequireFfmpeg(), import.Path, clip.Channels, clip.Rate);
+                var info = VorbisInfo.Read(audio, verifyChecksum: true);
+                if (info.Channels != clip.Channels || info.Rate != clip.Rate)
+                    throw new InvalidDataException(T("RepackagingRequiresLoopFreeAudioAnd"));
+                return new AudioLibrary.Replacement(clip, audio);
+            }).ToArray());
+
+            if (edits.Select(item => (item.Clip.Streamed, item.Clip.AudioId)).Distinct().Count() != edits.Length)
+                throw new InvalidDataException(T("SharedAudioImports"));
+            if (!pending.TryGetValue(selectedBank.Path, out var queued))
+                pending.Add(selectedBank.Path, queued = new());
+            foreach (var edit in edits)
+                queued[(edit.Clip.Streamed, edit.Clip.AudioId)] = edit;
+            Say(T("AudioPendingCount", queued.Count));
         });
     }
 
-    private static bool IsInside(string path, string directory)
+    private async Task SaveBank(bool overwrite)
     {
-        var relative = Path.GetRelativePath(directory, path);
-        return !Path.IsPathRooted(relative) && relative.Split(Path.DirectorySeparatorChar)[0] != "..";
+        if (Busy || library is not { } source || bank is not { } selectedBank)
+            return;
+        var edits = Pending?.Values.ToArray() ?? [];
+        string parent = Path.GetDirectoryName(selectedBank.Path)!;
+        AudioLibrary.CopyNames? names = null;
+        StopPlayback();
+
+        if (overwrite)
+        {
+            if (edits.Length == 0 || MessageBox.Show(this, T("AudioConfirmOverwrite", edits.Length),
+                T("OverwriteAudioBank"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                return;
+        }
+        else
+        {
+            try
+            {
+                var streams = source.Streams(selectedBank);
+                names = ChooseCopyNames(selectedBank, streams);
+            }
+            catch (Exception ex) when (IsAudioError(ex))
+            {
+                MessageBox.Show(this, ex.Message, T("AudioPackages"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (names is null)
+                return;
+            using var folder = new FolderBrowserDialog { Description = T("SelectTheParentFolderWherePackage"), SelectedPath = parent };
+            if (folder.ShowDialog(this) != DialogResult.OK)
+                return;
+            parent = folder.SelectedPath;
+        }
+
+        bool saved = false;
+        string? result = null;
+        await Work(T("CreatingPackageCopies"), async () =>
+        {
+            string savedLocation = await Task.Run(() => source.Repack(selectedBank, edits, parent, names));
+            pending.Remove(selectedBank.Path);
+            saved = true;
+            result = overwrite ? T("AudioAppliedBackup", savedLocation) : T("PackagesSaved0", savedLocation);
+            MessageBox.Show(this, result, T("AudioPackages"));
+        });
+        if (saved && overwrite)
+            await LoadSelection();
+        if (result is not null)
+            Say(result);
+    }
+
+    private AudioLibrary.CopyNames? ChooseCopyNames(BaoPackage selectedBank, string[] streams)
+    {
+        string extension = Path.GetExtension(selectedBank.Path);
+        using var dialog = new Form
+        {
+            Text = T("SaveAudioBankAs"), StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog, MinimizeBox = false, MaximizeBox = false,
+            ShowInTaskbar = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Font = Font
+        };
+        var layout = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12) };
+        var bankName = new TextBox { Width = 365, Text = Path.GetFileName(selectedBank.Path) };
+        var streamName = new TextBox
+        {
+            Width = 365, Enabled = streams.Length > 0, Text = streams.Length > 0 ? Path.GetFileNameWithoutExtension(streams[0]) + ".spk" : ""
+        };
+        var bankLabel = new Label { Text = T("AudioBankFilename", extension), AutoSize = true, Anchor = AnchorStyles.Left };
+        var streamLabel = new Label { Text = T("AudioStreamFilename"), AutoSize = true, Anchor = AnchorStyles.Left };
+        bankName.AccessibleName = bankLabel.Text;
+        streamName.AccessibleName = streamLabel.Text;
+        layout.Controls.Add(bankLabel, 0, 0);
+        layout.Controls.Add(bankName, 1, 0);
+        layout.Controls.Add(streamLabel, 0, 1);
+        layout.Controls.Add(streamName, 1, 1);
+        if (streams.Length > 1)
+        {
+            var note = new Label { Text = T("AudioMultipleStreams"), AutoSize = true };
+            layout.Controls.Add(note, 0, 2);
+            layout.SetColumnSpan(note, 2);
+        }
+
+        var ok = new Button { Text = T("Save"), AutoSize = true };
+        var cancel = new Button { Text = T("Cancel"), AutoSize = true, DialogResult = DialogResult.Cancel };
+        var buttons = Flow();
+        buttons.FlowDirection = FlowDirection.RightToLeft;
+        buttons.Controls.AddRange([cancel, ok]);
+        layout.Controls.Add(buttons, 1, 3);
+        dialog.Controls.Add(layout);
+        dialog.AcceptButton = ok;
+        dialog.CancelButton = cancel;
+
+        AudioLibrary.CopyNames? result = null;
+        ok.Click += (_, _) =>
+        {
+            string? newBank = PackageName(bankName.Text, extension);
+            string? newStream = streams.Length == 0 ? "" : PackageName(streamName.Text, ".spk");
+            if (newBank is null || newStream is null || string.Equals(newBank, newStream, StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(dialog, T("AudioInvalidPackageNames"), T("SaveAudioBankAs"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            result = new(newBank, newStream);
+            dialog.DialogResult = DialogResult.OK;
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK ? result : null;
+    }
+
+    private static string? PackageName(string input, string extension)
+    {
+        string name = input.Trim();
+        if (name.Length == 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+            name.Any(c => c < ' ' || c > '~') || name.EndsWith('.') ||
+            System.Text.RegularExpressions.Regex.IsMatch(name.Split('.')[0].TrimEnd(),
+                @"\A(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])\z",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            return null;
+        if (!name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            name += extension;
+        return name.Length <= 200 ? name : null;
     }
 
     private string RequireFfmpeg() => ffmpeg ?? throw new IOException(T("FfmpegIsMissingExtractTheComplete"));
