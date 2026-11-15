@@ -43,7 +43,7 @@ Saving preserves the target file's IDs, order, line endings, and UTF-8 BOM setti
 | Decrypt | Converts an `.inf.enc` file to a readable UTF-8 `.inf` file. |
 | Encrypt | Converts an edited `.inf` file to an Oasis `.inf.enc` file. |
 
-Encrypted output ends in `.inf.enc` and decrypted output ends in `.inf`. The editor removes duplicate extensions from the output name. Choose separate paths for input and output. Conversion uses Twofish in CFB1 mode and the built-in Oasis key. A separate `KEY.txt` file is unnecessary.
+Encrypted output ends in `.inf.enc` and decrypted output ends in `.inf`. The editor removes duplicate extensions from the output name. Choose separate paths for input and output. Conversion uses Twofish in CFB1 mode and the built-in Oasis key.
 
 ## Audio packages
 
